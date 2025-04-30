@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>肺活量在线测量</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .control-panel {
+            margin: 20px 0;
+            text-align: center;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        .result {
+            font-size: 24px;
+            font-weight: bold;
+            text-align: center;
+            margin: 20px 0;
+            color: #27ae60;
+        }
+        .chart-container {
+            width: 100%;
+            height: 300px;
+            margin: 20px 0;
+        }
+        .calibration {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+        input {
+            padding: 8px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .instructions {
+            background-color: #fffde7;
+            padding: 15px;
+            border-left: 4px solid #ffd600;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>肺活量在线测量</h1>
+        
+        <div class="instructions">
+            <h3>使用说明：</h3>
+            <ol>
+                <li>点击"开始校准"按钮，输入您已知的肺活量值(如最近体检结果)</li>
+                <li>按照提示深吸气后均匀呼气进行校准</li>
+                <li>校准完成后点击"开始测量"进行实际测量</li>
+                <li>测量结果将显示在下方</li>
+            </ol>
+            <p><strong>注意：</strong>请使用Chrome或Edge浏览器，确保麦克风可用，在安静环境下测量。</p>
+        </div>
+        
+        <div class="control-panel">
+            <div class="calibration">
+                <h3>校准设置</h3>
+                <input type="number" id="knownVC" placeholder="输入已知肺活量(ml)" min="1000" max="7000">
+                <button id="calibrateBtn">开始校准</button>
+                <p id="calibrationResult"></p>
+            </div>
+            
+            <button id="recordBtn">开始测量</button>
+            <button id="stopBtn" disabled>停止</button>
+        </div>
+        
+        <div class="result" id="result">
+            等待测量...
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="audioChart"></canvas>
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="amplitudeChart"></canvas>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // 全局变量
+        let audioContext;
+        let mediaStream;
+        let recorder;
+        let audioBuffer = [];
+        let isRecording = false;
+        let calibrationK = 1.0;
+        let sampleRate = 16000;
+        let duration = 10;
+        
+        // 图表实例
+        let audioChart;
+        let amplitudeChart;
+        
+        // DOM元素
+        const recordBtn = document.getElementById('recordBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const calibrateBtn = document.getElementById('calibrateBtn');
+        const resultDiv = document.getElementById('result');
+        const calibrationResult = document.getElementById('calibrationResult');
+        const knownVCInput = document.getElementById('knownVC');
+        
+        // 初始化图表
+        function initCharts() {
+            const audioCtx = document.getElementById('audioChart').getContext('2d');
+            const amplitudeCtx = document.getElementById('amplitudeChart').getContext('2d');
+            
+            audioChart = new Chart(audioCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '音频波形',
+                        data: [],
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: '时间 (s)'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: '振幅'
+                            }
+                        }
+                    }
+                }
+            });
+            
+            amplitudeChart = new Chart(amplitudeCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '振幅包络',
+                        data: [],
+                        borderColor: 'rgb(255, 99, 132)',
+                        tension: 0.1,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: '时间 (s)'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'RMS振幅'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // 预处理音频信号 (带通滤波)
+        function preprocessAudio(audioData) {
+            // 简单的数字滤波器实现 (模拟50-5000Hz带通)
+            const nyquist = sampleRate / 2;
+            const lowFreq = 50 / nyquist;
+            const highFreq = 5000 / nyquist;
+            
+            // 简单的IIR滤波器实现
+            const filtered = new Float32Array(audioData.length);
+            let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+            
+            // 二阶巴特沃斯带通滤波器的简化实现
+            for (let i = 0; i < audioData.length; i++) {
+                const x = audioData[i];
+                const y = 0.0029 * x + 0.0058 * x1 + 0.0029 * x2 
+                        + 1.7235 * y1 - 0.7575 * y2;
+                
+                x2 = x1;
+                x1 = x;
+                y2 = y1;
+                y1 = y;
+                
+                filtered[i] = y;
+            }
+            
+            return filtered;
+        }
+        
+        // 计算振幅包络
+        function calculateAmplitudes(audioData) {
+            const frameLength = Math.floor(0.02 * sampleRate); // 20ms帧
+            const hopLength = Math.floor(frameLength / 2);
+            const amplitudes = [];
+            
+            for (let i = 0; i < audioData.length - frameLength; i += hopLength) {
+                let sum = 0;
+                for (let j = 0; j < frameLength; j++) {
+                    sum += audioData[i + j] * audioData[i + j];
+                }
+                const rms = Math.sqrt(sum / frameLength);
+                amplitudes.push(rms);
+            }
+            
+            return amplitudes;
+        }
+        
+        // 预测肺活量
+        function predictVitalCapacity(amplitudes) {
+            const deltaT = 0.02; // 每帧20ms
+            let sum = 0;
+            
+            for (let i = 0; i < amplitudes.length; i++) {
+                sum += amplitudes[i] * deltaT;
+            }
+            
+            return sum * calibrationK * 1000; // 转换为毫升
+        }
+        
+        // 更新音频波形图表
+        function updateAudioChart(audioData) {
+            const step = Math.floor(audioData.length / 1000); // 下采样到1000点
+            const labels = [];
+            const data = [];
+            
+            for (let i = 0; i < audioData.length; i += step) {
+                labels.push((i / sampleRate).toFixed(2));
+                data.push(audioData[i]);
+            }
+            
+            audioChart.data.labels = labels;
+            audioChart.data.datasets[0].data = data;
+            audioChart.update();
+        }
+        
+        // 更新振幅包络图表
+        function updateAmplitudeChart(amplitudes) {
+            const labels = [];
+            const data = [];
+            
+            for (let i = 0; i < amplitudes.length; i++) {
+                labels.push((i * 0.01).toFixed(2)); // 每帧10ms
+                data.push(amplitudes[i]);
+            }
+            
+            amplitudeChart.data.labels = labels;
+            amplitudeChart.data.datasets[0].data = data;
+            amplitudeChart.update();
+        }
+        
+        // 开始录音
+        async function startRecording() {
+            try {
+                resultDiv.textContent = "准备录制...3秒后开始，请深吸气后均匀呼气...";
+                
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: sampleRate
+                });
+                
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const source = audioContext.createMediaStreamSource(mediaStream);
+                
+                recorder = audioContext.createScriptProcessor(4096, 1, 1);
+                audioBuffer = [];
+                
+                recorder.onaudioprocess = function(e) {
+                    if (!isRecording) return;
+                    
+                    const input = e.inputBuffer.getChannelData(0);
+                    for (let i = 0; i < input.length; i++) {
+                        audioBuffer.push(input[i]);
+                    }
+                };
+                
+                source.connect(recorder);
+                recorder.connect(audioContext.destination);
+                
+                setTimeout(() => {
+                    isRecording = true;
+                    resultDiv.textContent = "正在录制...请均匀呼气";
+                    recordBtn.disabled = true;
+                    stopBtn.disabled = false;
+                }, 3000);
+                
+            } catch (err) {
+                console.error("录音错误:", err);
+                resultDiv.textContent = "错误: " + err.message;
+            }
+        }
+        
+        // 停止录音并处理
+        function stopRecording(isCalibration = false) {
+            isRecording = false;
+            recordBtn.disabled = false;
+            stopBtn.disabled = true;
+            
+            // 停止录音
+            if (recorder) {
+                recorder.disconnect();
+            }
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+            
+            // 处理音频数据
+            const filtered = preprocessAudio(audioBuffer);
+            const amplitudes = calculateAmplitudes(filtered);
+            
+            // 更新图表
+            updateAudioChart(filtered);
+            updateAmplitudeChart(amplitudes);
+            
+            if (isCalibration) {
+                // 校准模式
+                const knownVC = parseFloat(knownVCInput.value);
+                if (isNaN(knownVC) || knownVC <= 0) {
+                    calibrationResult.textContent = "错误: 请输入有效的肺活量值";
+                    return;
+                }
+                
+                const deltaT = 0.02;
+                let sum = 0;
+                
+                for (let i = 0; i < amplitudes.length; i++) {
+                    sum += amplitudes[i] * deltaT;
+                }
+                
+                calibrationK = knownVC / (sum * 1000);
+                calibrationResult.innerHTML = `校准完成! 校准系数 k = ${calibrationK.toFixed(4)}`;
+                resultDiv.textContent = "校准完成，可以开始测量";
+                
+            } else {
+                // 测量模式
+                const vc = predictVitalCapacity(amplitudes);
+                resultDiv.textContent = `预测肺活量: ${vc.toFixed(1)} ml`;
+            }
+        }
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            
+            // 事件监听
+            recordBtn.addEventListener('click', startRecording);
+            stopBtn.addEventListener('click', () => stopRecording(false));
+            calibrateBtn.addEventListener('click', () => {
+                const knownVC = parseFloat(knownVCInput.value);
+                if (isNaN(knownVC) || knownVC <= 0) {
+                    calibrationResult.textContent = "错误: 请输入有效的肺活量值";
+                    return;
+                }
+                
+                calibrationResult.textContent = "准备校准...";
+                startRecording();
+                
+                // 设置一个定时器在duration后自动停止
+                setTimeout(() => {
+                    if (isRecording) {
+                        stopRecording(true);
+                    }
+                }, (duration + 3) * 1000); // 3秒准备时间 + 录制时间
+            });
+        });
+    </script>
+</body>
+</html>
