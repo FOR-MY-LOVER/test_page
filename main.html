@@ -74,6 +74,45 @@
             border-left: 4px solid #ffd600;
             margin: 15px 0;
         }
+        .video-container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            margin: 0 auto;
+            background-color: #000;
+        }
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #face-guide {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            height: 400px;
+            border: 3px solid #00ff00;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+        .face-guide-text {
+            position: absolute;
+            top: 10px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            color: #00ff00;
+            font-weight: bold;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+        }
+        .status {
+            text-align: center;
+            margin: 10px 0;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -86,21 +125,32 @@
                 <li>点击"开始校准"按钮，输入您已知的肺活量值(如最近体检结果)</li>
                 <li>按照提示深吸气后均匀呼气进行校准</li>
                 <li>校准完成后点击"开始测量"进行实际测量</li>
+                <li>测量时请将面部置于绿色框内</li>
                 <li>测量结果将显示在下方</li>
             </ol>
-            <p><strong>注意：</strong>请使用Chrome或Edge浏览器，确保麦克风可用，在安静环境下测量。</p>
+            <p><strong>注意：</strong>请使用Chrome或Edge浏览器，确保麦克风和摄像头可用，在安静环境下测量。</p>
         </div>
+        
+        <div class="video-container">
+            <video id="video" autoplay muted></video>
+            <div id="face-guide">
+                <div class="face-guide-text">请将面部置于此框内</div>
+            </div>
+        </div>
+        
+        <div class="status" id="status">准备就绪</div>
         
         <div class="control-panel">
             <div class="calibration">
                 <h3>校准设置</h3>
                 <input type="number" id="knownVC" placeholder="输入已知肺活量(ml)" min="1000" max="7000">
                 <button id="calibrateBtn">开始校准</button>
+                <button id="stopCalibrateBtn" disabled>结束校准</button>
                 <p id="calibrationResult"></p>
             </div>
             
             <button id="recordBtn">开始测量</button>
-            <button id="stopBtn" disabled>停止</button>
+            <button id="stopBtn" disabled>停止测量</button>
         </div>
         
         <div class="result" id="result">
@@ -126,7 +176,7 @@
         let isRecording = false;
         let calibrationK = 1.0;
         let sampleRate = 16000;
-        let duration = 10;
+        let videoStream;
         
         // 图表实例
         let audioChart;
@@ -136,9 +186,12 @@
         const recordBtn = document.getElementById('recordBtn');
         const stopBtn = document.getElementById('stopBtn');
         const calibrateBtn = document.getElementById('calibrateBtn');
+        const stopCalibrateBtn = document.getElementById('stopCalibrateBtn');
         const resultDiv = document.getElementById('result');
         const calibrationResult = document.getElementById('calibrationResult');
         const knownVCInput = document.getElementById('knownVC');
+        const statusDiv = document.getElementById('status');
+        const video = document.getElementById('video');
         
         // 初始化图表
         function initCharts() {
@@ -297,10 +350,29 @@
             amplitudeChart.update();
         }
         
-        // 开始录音
-        async function startRecording() {
+        // 初始化摄像头
+        async function initCamera() {
             try {
-                resultDiv.textContent = "准备录制...3秒后开始，请深吸气后均匀呼气...";
+                videoStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: true,
+                    audio: false
+                });
+                video.srcObject = videoStream;
+                statusDiv.textContent = "摄像头已就绪，请将面部置于绿色框内";
+            } catch (err) {
+                console.error("摄像头访问错误:", err);
+                statusDiv.textContent = "错误: 无法访问摄像头 - " + err.message;
+            }
+        }
+        
+        // 开始录音
+        async function startRecording(isCalibration = false) {
+            try {
+                if (isCalibration) {
+                    statusDiv.textContent = "校准准备...3秒后开始，请深吸气后均匀呼气...";
+                } else {
+                    statusDiv.textContent = "测量准备...3秒后开始，请深吸气后均匀呼气...";
+                }
                 
                 audioContext = new (window.AudioContext || window.webkitAudioContext)({
                     sampleRate: sampleRate
@@ -326,22 +398,30 @@
                 
                 setTimeout(() => {
                     isRecording = true;
-                    resultDiv.textContent = "正在录制...请均匀呼气";
-                    recordBtn.disabled = true;
-                    stopBtn.disabled = false;
+                    if (isCalibration) {
+                        statusDiv.textContent = "正在校准...请均匀呼气";
+                    } else {
+                        statusDiv.textContent = "正在测量...请均匀呼气";
+                    }
+                    
+                    if (isCalibration) {
+                        calibrateBtn.disabled = true;
+                        stopCalibrateBtn.disabled = false;
+                    } else {
+                        recordBtn.disabled = true;
+                        stopBtn.disabled = false;
+                    }
                 }, 3000);
                 
             } catch (err) {
                 console.error("录音错误:", err);
-                resultDiv.textContent = "错误: " + err.message;
+                statusDiv.textContent = "错误: " + err.message;
             }
         }
         
         // 停止录音并处理
         function stopRecording(isCalibration = false) {
             isRecording = false;
-            recordBtn.disabled = false;
-            stopBtn.disabled = true;
             
             // 停止录音
             if (recorder) {
@@ -350,6 +430,12 @@
             if (mediaStream) {
                 mediaStream.getTracks().forEach(track => track.stop());
             }
+            
+            // 重置按钮状态
+            recordBtn.disabled = false;
+            stopBtn.disabled = true;
+            calibrateBtn.disabled = false;
+            stopCalibrateBtn.disabled = true;
             
             // 处理音频数据
             const filtered = preprocessAudio(audioBuffer);
@@ -364,6 +450,7 @@
                 const knownVC = parseFloat(knownVCInput.value);
                 if (isNaN(knownVC) || knownVC <= 0) {
                     calibrationResult.textContent = "错误: 请输入有效的肺活量值";
+                    statusDiv.textContent = "校准失败，请重试";
                     return;
                 }
                 
@@ -376,22 +463,25 @@
                 
                 calibrationK = knownVC / (sum * 1000);
                 calibrationResult.innerHTML = `校准完成! 校准系数 k = ${calibrationK.toFixed(4)}`;
-                resultDiv.textContent = "校准完成，可以开始测量";
+                statusDiv.textContent = "校准完成，可以开始测量";
                 
             } else {
                 // 测量模式
                 const vc = predictVitalCapacity(amplitudes);
                 resultDiv.textContent = `预测肺活量: ${vc.toFixed(1)} ml`;
+                statusDiv.textContent = "测量完成";
             }
         }
         
         // 初始化
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
             initCharts();
+            await initCamera();
             
             // 事件监听
-            recordBtn.addEventListener('click', startRecording);
+            recordBtn.addEventListener('click', () => startRecording(false));
             stopBtn.addEventListener('click', () => stopRecording(false));
+            
             calibrateBtn.addEventListener('click', () => {
                 const knownVC = parseFloat(knownVCInput.value);
                 if (isNaN(knownVC) || knownVC <= 0) {
@@ -400,15 +490,10 @@
                 }
                 
                 calibrationResult.textContent = "准备校准...";
-                startRecording();
-                
-                // 设置一个定时器在duration后自动停止
-                setTimeout(() => {
-                    if (isRecording) {
-                        stopRecording(true);
-                    }
-                }, (duration + 3) * 1000); // 3秒准备时间 + 录制时间
+                startRecording(true);
             });
+            
+            stopCalibrateBtn.addEventListener('click', () => stopRecording(true));
         });
     </script>
 </body>
