@@ -117,7 +117,7 @@
             width: 100%;
             height: 100%;
             object-fit: cover;
-        }
+}
         
         #face-guide {
             position: absolute;
@@ -153,6 +153,19 @@
             display: flex;
             align-items: center;
             justify-content: center;
+        }
+        
+        .audio-controls {
+            margin: 15px 0;
+            text-align: center;
+        }
+        
+        .audio-controls button {
+            background-color: #9b59b6;
+        }
+        
+        .audio-controls button:hover {
+            background-color: #8e44ad;
         }
         
         /* 针对大屏幕的调整 */
@@ -237,6 +250,12 @@
             <button id="stopBtn" disabled>停止测量</button>
         </div>
         
+        <div class="audio-controls">
+            <button id="playCalibrationBtn" disabled>播放校准音频</button>
+            <button id="playTestBtn" disabled>播放测试音频</button>
+            <audio id="audioPlayer" controls style="display: none;"></audio>
+        </div>
+        
         <div class="result" id="result">
             等待测量...
         </div>
@@ -261,6 +280,8 @@
         let calibrationK = 1.0;
         let sampleRate = 16000;
         let videoStream;
+        let calibrationAudioBlob;
+        let testAudioBlob;
         
         // 图表实例
         let audioChart;
@@ -276,6 +297,9 @@
         const knownVCInput = document.getElementById('knownVC');
         const statusDiv = document.getElementById('status');
         const video = document.getElementById('video');
+        const playCalibrationBtn = document.getElementById('playCalibrationBtn');
+        const playTestBtn = document.getElementById('playTestBtn');
+        const audioPlayer = document.getElementById('audioPlayer');
         
         // 初始化图表
         function initCharts() {
@@ -535,6 +559,9 @@
             updateAudioChart(filtered);
             updateAmplitudeChart(amplitudes);
             
+            // 保存录音
+            saveRecording(audioBuffer, isCalibration);
+            
             if (isCalibration) {
                 // 校准模式
                 const knownVC = parseFloat(knownVCInput.value);
@@ -563,6 +590,91 @@
             }
         }
         
+        // 保存录音
+        function saveRecording(audioData, isCalibration) {
+            // 将Float32Array转换为Int16Array
+            const int16Data = new Int16Array(audioData.length);
+            for (let i = 0; i < audioData.length; i++) {
+                int16Data[i] = audioData[i] * 32767;
+            }
+            
+            // 创建WAV文件头
+            const buffer = new ArrayBuffer(44 + int16Data.length * 2);
+            const view = new DataView(buffer);
+            
+            // WAV文件头
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 32 + int16Data.length * 2, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, int16Data.length * 2, true);
+            
+            // 写入音频数据
+            const offset = 44;
+            for (let i = 0; i < int16Data.length; i++) {
+                view.setInt16(offset + i * 2, int16Data[i], true);
+            }
+            
+            // 创建Blob对象
+            const blob = new Blob([view], { type: 'audio/wav' });
+            
+            // 根据录音类型保存
+            if (isCalibration) {
+                calibrationAudioBlob = blob;
+                playCalibrationBtn.disabled = false;
+            } else {
+                testAudioBlob = blob;
+                playTestBtn.disabled = false;
+            }
+        }
+        
+        // 辅助函数：写入字符串到DataView
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+        
+        // 播放校准音频
+        function playCalibrationAudio() {
+            if (!calibrationAudioBlob) return;
+            
+            const url = URL.createObjectURL(calibrationAudioBlob);
+            audioPlayer.src = url;
+            audioPlayer.style.display = 'block';
+            audioPlayer.play();
+            statusDiv.textContent = "正在播放校准音频...";
+            
+            audioPlayer.onended = function() {
+                statusDiv.textContent = "校准音频播放完成";
+                URL.revokeObjectURL(url);
+            };
+        }
+        
+        // 播放测试音频
+        function playTestAudio() {
+            if (!testAudioBlob) return;
+            
+            const url = URL.createObjectURL(testAudioBlob);
+            audioPlayer.src = url;
+            audioPlayer.style.display = 'block';
+            audioPlayer.play();
+            statusDiv.textContent = "正在播放测试音频...";
+            
+            audioPlayer.onended = function() {
+                statusDiv.textContent = "测试音频播放完成";
+                URL.revokeObjectURL(url);
+            };
+        }
+        
         // 初始化
         document.addEventListener('DOMContentLoaded', async () => {
             initCharts();
@@ -584,6 +696,10 @@
             });
             
             stopCalibrateBtn.addEventListener('click', () => stopRecording(true));
+            
+            // 音频控制按钮
+            playCalibrationBtn.addEventListener('click', playCalibrationAudio);
+            playTestBtn.addEventListener('click', playTestAudio);
             
             // 处理窗口大小变化
             window.addEventListener('resize', function() {
