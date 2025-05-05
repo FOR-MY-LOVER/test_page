@@ -2,37 +2,44 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>肺活量记录系统</title>
     <style>
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
         body {
-            font-family: 'Microsoft YaHei', sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif;
+            max-width: 100%;
+            margin: 0;
+            padding: 15px;
             background-color: #f5f5f5;
+            -webkit-text-size-adjust: 100%;
         }
         .container {
             background-color: white;
-            padding: 30px;
+            padding: 20px;
             border-radius: 10px;
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
         }
         h1 {
             color: #2c3e50;
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
         }
         .section {
-            margin-bottom: 25px;
-            padding: 20px;
+            margin-bottom: 20px;
+            padding: 15px;
             border: 1px solid #ddd;
-            border-radius: 5px;
+            border-radius: 8px;
         }
         .section-title {
-            font-size: 18px;
+            font-size: 1.1rem;
             font-weight: bold;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
             color: #3498db;
         }
         button {
@@ -42,9 +49,13 @@
             padding: 10px 15px;
             border-radius: 5px;
             cursor: pointer;
-            font-size: 16px;
-            margin-right: 10px;
+            font-size: 1rem;
+            margin-right: 8px;
+            margin-bottom: 8px;
             transition: background-color 0.3s;
+            width: 100%;
+            max-width: 200px;
+            touch-action: manipulation;
         }
         button:hover {
             background-color: #2980b9;
@@ -67,42 +78,78 @@
         }
         #audioVisualizer {
             width: 100%;
-            height: 100px;
+            height: 80px;
             background-color: #ecf0f1;
             margin-top: 15px;
             border-radius: 5px;
+            overflow: hidden;
         }
         #recordingsList {
-            margin-top: 20px;
+            margin-top: 15px;
         }
         .recording-item {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
+            flex-direction: column;
             padding: 10px;
             border-bottom: 1px solid #eee;
         }
         .recording-item audio {
-            flex-grow: 1;
-            margin-right: 10px;
+            width: 100%;
+            margin-bottom: 8px;
+        }
+        .recording-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .recording-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .recording-actions button {
+            margin: 0;
+            flex: 1;
+            min-width: 100px;
         }
         input[type="number"] {
-            padding: 8px;
+            padding: 10px;
             border: 1px solid #ddd;
             border-radius: 5px;
-            width: 150px;
-            font-size: 16px;
+            width: 100%;
+            max-width: 200px;
+            font-size: 1rem;
+            margin-bottom: 10px;
         }
         .status {
             margin-top: 10px;
             font-style: italic;
             color: #7f8c8d;
+            font-size: 0.9rem;
         }
         .success {
             color: #27ae60;
         }
         .error {
             color: #e74c3c;
+        }
+        
+        /* 移动端特定样式 */
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            .section {
+                padding: 12px;
+            }
+            button {
+                padding: 12px 15px;
+                font-size: 1rem;
+            }
+            #audioVisualizer {
+                height: 60px;
+            }
         }
     </style>
 </head>
@@ -113,8 +160,10 @@
         <div class="section">
             <div class="section-title">1. 录音功能</div>
             <p>请按下录音按钮录制您的呼气音频：</p>
-            <button id="recordButton">开始录音</button>
-            <button id="stopButton" disabled>停止录音</button>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                <button id="recordButton">开始录音</button>
+                <button id="stopButton" disabled>停止录音</button>
+            </div>
             <div id="audioVisualizer"></div>
             <div id="recordingStatus" class="status"></div>
             
@@ -150,14 +199,24 @@
         const capacityStatus = document.getElementById('capacityStatus');
         let maxLungCapacity = null;
         
+        // 检测是否在移动设备上
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        
         // 开始录音
         recordButton.addEventListener('click', async () => {
             try {
+                // 在移动设备上，需要用户交互后才能播放音频
+                if (isMobile) {
+                    const dummyAudio = new Audio();
+                    dummyAudio.src = 'data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU...';
+                    await dummyAudio.play().catch(e => {});
+                }
+                
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 mediaRecorder = new MediaRecorder(stream);
                 
                 // 设置音频可视化
-                const audioContext = new AudioContext();
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 const analyser = audioContext.createAnalyser();
                 const source = audioContext.createMediaStreamSource(stream);
                 source.connect(analyser);
@@ -230,15 +289,22 @@
                 console.error('录音错误:', error);
                 recordingStatus.textContent = '录音失败: ' + error.message;
                 recordingStatus.className = 'status error';
+                
+                // 移动设备特定错误处理
+                if (isMobile && error.name === 'NotAllowedError') {
+                    recordingStatus.textContent += '。请确保已授予麦克风访问权限。';
+                }
             }
         });
         
         // 停止录音
         stopButton.addEventListener('click', () => {
-            mediaRecorder.stop();
-            recordButton.disabled = false;
-            stopButton.disabled = true;
-            recordingStatus.textContent = '正在处理录音...';
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                recordButton.disabled = false;
+                stopButton.disabled = true;
+                recordingStatus.textContent = '正在处理录音...';
+            }
         });
         
         // 更新录音列表显示
@@ -258,8 +324,18 @@
                 audioElement.controls = true;
                 audioElement.src = recording.url;
                 
-                const infoElement = document.createElement('span');
-                infoElement.textContent = recording.timestamp;
+                // 移动端音频播放修复
+                if (isMobile) {
+                    audioElement.setAttribute('playsinline', '');
+                    audioElement.setAttribute('webkit-playsinline', '');
+                }
+                
+                const infoDiv = document.createElement('div');
+                infoDiv.className = 'recording-info';
+                infoDiv.innerHTML = `<span>${recording.timestamp}</span>`;
+                
+                const actionsDiv = document.createElement('div');
+                actionsDiv.className = 'recording-actions';
                 
                 const downloadButton = document.createElement('button');
                 downloadButton.textContent = '下载';
@@ -273,10 +349,12 @@
                     deleteRecording(recording.id);
                 };
                 
+                actionsDiv.appendChild(downloadButton);
+                actionsDiv.appendChild(deleteButton);
+                
                 recordingItem.appendChild(audioElement);
-                recordingItem.appendChild(infoElement);
-                recordingItem.appendChild(downloadButton);
-                recordingItem.appendChild(deleteButton);
+                recordingItem.appendChild(infoDiv);
+                recordingItem.appendChild(actionsDiv);
                 
                 recordingsList.appendChild(recordingItem);
             });
@@ -287,7 +365,9 @@
             const a = document.createElement('a');
             a.href = recording.url;
             a.download = `录音_${recording.timestamp.replace(/[/:\\]/g, '-')}.wav`;
+            document.body.appendChild(a);
             a.click();
+            document.body.removeChild(a);
         }
         
         // 删除录音
@@ -309,10 +389,35 @@
             maxLungCapacity = capacity;
             capacityStatus.textContent = `最大肺活量已保存: ${capacity} 毫升`;
             capacityStatus.className = 'status success';
+            
+            // 保存到localStorage
+            localStorage.setItem('maxLungCapacity', capacity);
         });
         
         // 初始化
-        updateRecordingsList();
+        if (localStorage.getItem('maxLungCapacity')) {
+            lungCapacityInput.value = localStorage.getItem('maxLungCapacity');
+            maxLungCapacity = parseInt(localStorage.getItem('maxLungCapacity'));
+        }
+        
+        // 移动端特定初始化
+        if (isMobile) {
+            // 添加触摸事件支持
+            recordButton.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                recordButton.click();
+            });
+            
+            stopButton.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                stopButton.click();
+            });
+            
+            saveCapacityButton.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                saveCapacityButton.click();
+            });
+        }
     </script>
 </body>
 </html>
