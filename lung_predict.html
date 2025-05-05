@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>肺活量记录系统</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 25px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #3498db;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        #recordButton {
+            background-color: #e74c3c;
+        }
+        #recordButton:hover {
+            background-color: #c0392b;
+        }
+        #stopButton {
+            background-color: #2ecc71;
+        }
+        #stopButton:hover {
+            background-color: #27ae60;
+        }
+        #audioVisualizer {
+            width: 100%;
+            height: 100px;
+            background-color: #ecf0f1;
+            margin-top: 15px;
+            border-radius: 5px;
+        }
+        #recordingsList {
+            margin-top: 20px;
+        }
+        .recording-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        .recording-item audio {
+            flex-grow: 1;
+            margin-right: 10px;
+        }
+        input[type="number"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            width: 150px;
+            font-size: 16px;
+        }
+        .status {
+            margin-top: 10px;
+            font-style: italic;
+            color: #7f8c8d;
+        }
+        .success {
+            color: #27ae60;
+        }
+        .error {
+            color: #e74c3c;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>肺活量记录系统</h1>
+        
+        <div class="section">
+            <div class="section-title">1. 录音功能</div>
+            <p>请按下录音按钮录制您的呼气音频：</p>
+            <button id="recordButton">开始录音</button>
+            <button id="stopButton" disabled>停止录音</button>
+            <div id="audioVisualizer"></div>
+            <div id="recordingStatus" class="status"></div>
+            
+            <div id="recordingsList">
+                <div class="section-title">已录制的音频</div>
+                <!-- 录音列表将在这里动态生成 -->
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">2. 历史最大肺活量</div>
+            <p>请输入您的历史最大肺活量值（毫升）：</p>
+            <input type="number" id="lungCapacityInput" min="0" step="100" placeholder="例如: 4500">
+            <button id="saveCapacityButton">保存</button>
+            <div id="capacityStatus" class="status"></div>
+        </div>
+    </div>
+
+    <script>
+        // 录音功能变量
+        let mediaRecorder;
+        let audioChunks = [];
+        let recordings = [];
+        const recordButton = document.getElementById('recordButton');
+        const stopButton = document.getElementById('stopButton');
+        const audioVisualizer = document.getElementById('audioVisualizer');
+        const recordingStatus = document.getElementById('recordingStatus');
+        const recordingsList = document.getElementById('recordingsList');
+        
+        // 肺活量输入变量
+        const lungCapacityInput = document.getElementById('lungCapacityInput');
+        const saveCapacityButton = document.getElementById('saveCapacityButton');
+        const capacityStatus = document.getElementById('capacityStatus');
+        let maxLungCapacity = null;
+        
+        // 开始录音
+        recordButton.addEventListener('click', async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                
+                // 设置音频可视化
+                const audioContext = new AudioContext();
+                const analyser = audioContext.createAnalyser();
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = audioVisualizer.offsetWidth;
+                canvas.height = audioVisualizer.offsetHeight;
+                audioVisualizer.innerHTML = '';
+                audioVisualizer.appendChild(canvas);
+                
+                const canvasCtx = canvas.getContext('2d');
+                const bufferLength = analyser.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLength);
+                
+                function draw() {
+                    requestAnimationFrame(draw);
+                    analyser.getByteFrequencyData(dataArray);
+                    
+                    canvasCtx.fillStyle = 'rgb(200, 200, 200)';
+                    canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+                    
+                    const barWidth = (canvas.width / bufferLength) * 2.5;
+                    let x = 0;
+                    
+                    for(let i = 0; i < bufferLength; i++) {
+                        const barHeight = dataArray[i] / 2;
+                        canvasCtx.fillStyle = `rgb(50, 50, ${barHeight + 100})`;
+                        canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+                        x += barWidth + 1;
+                    }
+                }
+                
+                draw();
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    const timestamp = new Date().toLocaleString();
+                    
+                    // 保存录音
+                    recordings.push({
+                        id: Date.now(),
+                        url: audioUrl,
+                        blob: audioBlob,
+                        timestamp: timestamp
+                    });
+                    
+                    // 更新录音列表
+                    updateRecordingsList();
+                    
+                    // 重置
+                    audioChunks = [];
+                    stream.getTracks().forEach(track => track.stop());
+                    
+                    recordingStatus.textContent = `录音已保存 (${timestamp})`;
+                    recordingStatus.className = 'status success';
+                };
+                
+                mediaRecorder.start();
+                recordButton.disabled = true;
+                stopButton.disabled = false;
+                recordingStatus.textContent = '正在录音...';
+                recordingStatus.className = 'status';
+                
+            } catch (error) {
+                console.error('录音错误:', error);
+                recordingStatus.textContent = '录音失败: ' + error.message;
+                recordingStatus.className = 'status error';
+            }
+        });
+        
+        // 停止录音
+        stopButton.addEventListener('click', () => {
+            mediaRecorder.stop();
+            recordButton.disabled = false;
+            stopButton.disabled = true;
+            recordingStatus.textContent = '正在处理录音...';
+        });
+        
+        // 更新录音列表显示
+        function updateRecordingsList() {
+            recordingsList.innerHTML = '<div class="section-title">已录制的音频</div>';
+            
+            if (recordings.length === 0) {
+                recordingsList.innerHTML += '<p>暂无录音</p>';
+                return;
+            }
+            
+            recordings.forEach(recording => {
+                const recordingItem = document.createElement('div');
+                recordingItem.className = 'recording-item';
+                
+                const audioElement = document.createElement('audio');
+                audioElement.controls = true;
+                audioElement.src = recording.url;
+                
+                const infoElement = document.createElement('span');
+                infoElement.textContent = recording.timestamp;
+                
+                const downloadButton = document.createElement('button');
+                downloadButton.textContent = '下载';
+                downloadButton.onclick = () => {
+                    downloadRecording(recording);
+                };
+                
+                const deleteButton = document.createElement('button');
+                deleteButton.textContent = '删除';
+                deleteButton.onclick = () => {
+                    deleteRecording(recording.id);
+                };
+                
+                recordingItem.appendChild(audioElement);
+                recordingItem.appendChild(infoElement);
+                recordingItem.appendChild(downloadButton);
+                recordingItem.appendChild(deleteButton);
+                
+                recordingsList.appendChild(recordingItem);
+            });
+        }
+        
+        // 下载录音
+        function downloadRecording(recording) {
+            const a = document.createElement('a');
+            a.href = recording.url;
+            a.download = `录音_${recording.timestamp.replace(/[/:\\]/g, '-')}.wav`;
+            a.click();
+        }
+        
+        // 删除录音
+        function deleteRecording(id) {
+            recordings = recordings.filter(r => r.id !== id);
+            updateRecordingsList();
+        }
+        
+        // 保存最大肺活量
+        saveCapacityButton.addEventListener('click', () => {
+            const capacity = parseInt(lungCapacityInput.value);
+            
+            if (isNaN(capacity) || capacity <= 0) {
+                capacityStatus.textContent = '请输入有效的肺活量值';
+                capacityStatus.className = 'status error';
+                return;
+            }
+            
+            maxLungCapacity = capacity;
+            capacityStatus.textContent = `最大肺活量已保存: ${capacity} 毫升`;
+            capacityStatus.className = 'status success';
+        });
+        
+        // 初始化
+        updateRecordingsList();
+    </script>
+</body>
+</html>
