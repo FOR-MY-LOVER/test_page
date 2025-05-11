@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ONNX加载修复测试</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.15.0/dist/ort.min.js"></script>
+    <style>
+        body { font-family: Arial; max-width: 600px; margin: 20px auto; }
+        #status {
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+            background: #f0f0f0;
+        }
+        .success { background: #dff0d8; color: #3c763d; }
+        .error { background: #f2dede; color: #a94442; }
+    </style>
+</head>
+<body>
+    <h2>ONNX模型加载修复测试</h2>
+    <div id="status">准备就绪，点击测试按钮</div>
+    <button id="testBtn">测试模型加载</button>
+    
+    <script>
+        document.getElementById('testBtn').onclick = async function() {
+            const statusDiv = document.getElementById('status');
+            
+            try {
+                statusDiv.className = '';
+                statusDiv.textContent = '正在检查模型文件...';
+                
+                // 1. 检查文件是否存在
+                const testReq = await fetch('./lung_model.onnx');
+                if (!testReq.ok) {
+                    throw new Error(`文件不存在 (HTTP ${testReq.status})`);
+                }
+                
+                // 2. 加载模型
+                statusDiv.textContent = '正在加载ONNX运行时...';
+                ort.env.wasm.numThreads = 1; // 解决部分WASM线程问题
+                
+                statusDiv.textContent = '正在加载模型...';
+                const model = await ort.InferenceSession.create('./lung_model.onnx', {
+                    executionProviders: ['wasm'] // 强制使用WASM后端
+                });
+                
+                // 3. 显示成功信息
+                statusDiv.className = 'success';
+                statusDiv.innerHTML = `
+                    ✅ 加载成功！<br>
+                    输入: ${model.inputNames.join(', ')}<br>
+                    输出: ${model.outputNames.join(', ')}
+                `;
+                
+            } catch (error) {
+                statusDiv.className = 'error';
+                statusDiv.innerHTML = `
+                    ❌ 加载失败<br>
+                    错误: ${error.message}<br>
+                    <small>请检查控制台获取详细信息</small>
+                `;
+                console.error("完整错误:", error);
+                
+                // 额外诊断建议
+                if (error.message.includes('fetch')) {
+                    console.log("诊断建议：\n1. 确认模型文件与HTML同目录\n2. 使用本地服务器启动（如Live Server）");
+                }
+            }
+        };
+    </script>
+</body>
+</html>
