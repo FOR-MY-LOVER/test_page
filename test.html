@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>肺活量预测系统 (ONNX版)</title>
+    <title>肺活量预测系统</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.15.0/dist/ort.min.js"></script>
     <style>
         body {
@@ -13,445 +13,518 @@
             padding: 20px;
             line-height: 1.6;
         }
-        #upload-container {
-            border: 2px dashed #4285f4;
-            border-radius: 8px;
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+        }
+        .upload-container {
+            border: 2px dashed #3498db;
+            border-radius: 5px;
             padding: 30px;
             text-align: center;
             margin: 20px 0;
-            cursor: pointer;
-            transition: all 0.3s;
+            background-color: #f8f9fa;
         }
-        #upload-container:hover {
-            background-color: #f0f7ff;
-        }
-        #audio-visualizer {
-            width: 100%;
-            height: 120px;
-            background: #f5f5f5;
-            margin: 20px 0;
-            position: relative;
-            overflow: hidden;
-        }
-        .audio-bar {
-            position: absolute;
-            bottom: 0;
-            width: 2%;
-            background: #4285f4;
-            transition: height 0.3s;
-        }
-        #result-container {
+        #audio-upload {
             display: none;
-            margin-top: 30px;
-            padding: 20px;
-            background: #f9f9f9;
-            border-radius: 8px;
         }
-        .progress-container {
-            height: 30px;
-            background: #e0e0e0;
-            border-radius: 15px;
-            margin: 15px 0;
-            overflow: hidden;
-        }
-        #progress-bar {
-            height: 100%;
-            width: 0%;
-            background: linear-gradient(90deg, #34a853, #8bc34a);
-            transition: width 0.5s;
-        }
-        button {
-            background: #4285f4;
+        .upload-btn {
+            background-color: #3498db;
             color: white;
+            padding: 10px 20px;
             border: none;
-            padding: 12px 24px;
-            border-radius: 4px;
+            border-radius: 5px;
             cursor: pointer;
             font-size: 16px;
-            transition: background 0.3s;
+            transition: background-color 0.3s;
         }
-        button:hover {
-            background: #3367d6;
+        .upload-btn:hover {
+            background-color: #2980b9;
         }
-        button:disabled {
-            background: #cccccc;
-            cursor: not-allowed;
+        #status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .ready {
+            background-color: #f0f0f0;
         }
         .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(255,255,255,.3);
-            border-radius: 50%;
-            border-top-color: #fff;
-            animation: spin 1s ease-in-out infinite;
-            margin-right: 10px;
+            background-color: #fff3cd;
         }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        #audio-preview {
+            margin-top: 20px;
+            display: none;
+        }
+        #result {
+            margin-top: 20px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .progress-container {
+            width: 100%;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            margin: 20px 0;
+            display: none;
+        }
+        #progress-bar {
+            height: 20px;
+            border-radius: 5px;
+            background-color: #28a745;
+            width: 0%;
+            transition: width 0.3s;
         }
     </style>
 </head>
 <body>
     <h1>肺活量预测系统</h1>
-    <p>上传呼吸音音频文件(MP3/WAV)，系统将自动分析预测肺活量</p>
     
-    <div id="upload-container">
-        <p>点击或拖拽音频文件到此处</p>
-        <input type="file" id="audio-input" accept="audio/*" style="display: none;">
-    </div>
-    
-    <div id="audio-visualizer"></div>
-    
-    <button id="predict-btn" disabled>
-        <span id="spinner" class="loading" style="display: none;"></span>
-        <span id="btn-text">开始预测</span>
-    </button>
-    
-    <div id="result-container">
-        <h2>预测结果</h2>
-        <div>
-            <p>预测肺活量值: <span id="prediction-value">0</span> ml</p>
-            <div class="progress-container">
-                <div id="progress-bar"></div>
-            </div>
-            <div id="health-advice"></div>
+    <div class="upload-container">
+        <p>请上传音频文件进行肺活量预测</p>
+        <input type="file" id="audio-upload" accept="audio/*" />
+        <button class="upload-btn" id="upload-btn">选择音频文件</button>
+        <div id="file-name"></div>
+        
+        <div id="audio-preview">
+            <audio controls id="audio-player"></audio>
         </div>
     </div>
-
+    
+    <div class="progress-container" id="progress-container">
+        <div id="progress-bar"></div>
+    </div>
+    
+    <div id="status" class="ready">准备就绪，请上传音频文件</div>
+    
+    <div id="result"></div>
+    
     <script>
-        // 常量配置（与Python训练代码完全一致）
-        const TARGET_SAMPLE_RATE = 22050;
+        // 全局变量
+        let ortSession = null;
+        const SAMPLE_RATE = 22050;
         const N_FFT = 1024;
         const HOP_LENGTH = 512;
         const N_MELS = 128;
         const TARGET_LENGTH = 646; // 15秒音频对应的帧数
+        let melFilterBank = null; // 梅尔滤波器组
         
-        // DOM元素
-        const uploadContainer = document.getElementById('upload-container');
-        const audioInput = document.getElementById('audio-input');
-        const predictBtn = document.getElementById('predict-btn');
-        const resultContainer = document.getElementById('result-container');
-        const audioVisualizer = document.getElementById('audio-visualizer');
-        const predictionValue = document.getElementById('prediction-value');
-        const progressBar = document.getElementById('progress-bar');
-        const healthAdvice = document.getElementById('health-advice');
-        const spinner = document.getElementById('spinner');
-        const btnText = document.getElementById('btn-text');
-        
-        // 全局变量
-        let model = null;
-        let audioContext = null;
-        
-        // 初始化音频上下文
-        function initAudioContext() {
-            try {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                console.log("音频上下文初始化成功");
-            } catch (e) {
-                console.error("音频API不支持:", e);
-                alert("您的浏览器不支持Web Audio API，请使用Chrome/Firefox等现代浏览器");
-            }
-        }
-        
-        // 初始化ONNX模型
-        async function initModel() {
-            try {
-                setLoading(true, "加载AI模型中...");
-                
-                // 从同一目录加载ONNX模型
-                model = await ort.InferenceSession.create('./lung_model.onnx');
-                
-                console.log("模型输入要求:", {
-                    name: model.inputNames[0],
-                    shape: model.inputs[0].dims,
-                    type: model.inputs[0].type
-                });
-                
-                setLoading(false, "开始预测");
-                predictBtn.disabled = false;
-                
-            } catch (err) {
-                console.error("模型加载失败:", err);
-                setLoading(false, "模型加载失败");
-                alert(`模型加载失败: ${err.message}`);
-            }
-        }
-        
-        // 文件上传处理
-        uploadContainer.addEventListener('click', () => audioInput.click());
-        uploadContainer.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadContainer.style.backgroundColor = '#e8f4fc';
+        // 初始化
+        document.addEventListener('DOMContentLoaded', async function() {
+            // 绑定上传按钮事件
+            document.getElementById('upload-btn').addEventListener('click', function() {
+                document.getElementById('audio-upload').click();
+            });
+            
+            // 监听文件选择
+            document.getElementById('audio-upload').addEventListener('change', handleFileSelect);
+            
+            // 初始化梅尔滤波器组
+            melFilterBank = createMelFilterBank();
+            
+            // 加载ONNX模型
+            await loadONNXModel();
         });
-        uploadContainer.addEventListener('dragleave', () => {
-            uploadContainer.style.backgroundColor = '';
-        });
-        uploadContainer.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadContainer.style.backgroundColor = '';
-            if (e.dataTransfer.files.length) {
-                audioInput.files = e.dataTransfer.files;
-                handleFileSelect();
-            }
-        });
-        audioInput.addEventListener('change', handleFileSelect);
         
-        function handleFileSelect() {
-            const file = audioInput.files[0];
-            if (!file) return;
+        // 创建梅尔滤波器组
+        function createMelFilterBank() {
+            const filterBank = new Array(N_MELS);
+            const minMel = 0;
+            const maxMel = hzToMel(SAMPLE_RATE / 2);
+            const melPoints = linspace(minMel, maxMel, N_MELS + 2);
             
-            // 验证文件类型
-            if (!file.type.match('audio.*') && !file.name.match(/\.(mp3|wav)$/i)) {
-                alert('请上传有效的音频文件(MP3/WAV)');
-                return;
+            const binFreqs = new Array(N_FFT / 2 + 1);
+            for (let i = 0; i < binFreqs.length; i++) {
+                binFreqs[i] = i * SAMPLE_RATE / N_FFT;
             }
             
-            // 显示文件名
-            uploadContainer.innerHTML = `<p>已选择: ${file.name}</p>`;
-            predictBtn.disabled = false;
-            
-            // 预览音频
-            previewAudio(file);
-        }
-        
-        // 音频可视化
-        function previewAudio(file) {
-            const reader = new FileReader();
-            
-            reader.onload = function(e) {
-                const arrayBuffer = e.target.result;
+            for (let i = 0; i < N_MELS; i++) {
+                const leftMel = melPoints[i];
+                const centerMel = melPoints[i + 1];
+                const rightMel = melPoints[i + 2];
                 
-                audioContext.decodeAudioData(arrayBuffer)
-                    .then(buffer => {
-                        visualizeAudio(buffer);
-                    })
-                    .catch(err => {
-                        console.error('音频解码错误:', err);
-                        alert('音频文件解码失败，请尝试其他文件');
-                    });
-            };
-            
-            reader.readAsArrayBuffer(file);
-        }
-        
-        function visualizeAudio(buffer) {
-            audioVisualizer.innerHTML = '';
-            const data = buffer.getChannelData(0);
-            const barCount = 100;
-            
-            for (let i = 0; i < barCount; i++) {
-                const start = Math.floor(i * data.length / barCount);
-                const end = Math.floor((i + 1) * data.length / barCount);
-                const segment = data.slice(start, end);
-                const max = Math.max(...segment.map(Math.abs));
+                filterBank[i] = new Array(binFreqs.length).fill(0);
                 
-                const bar = document.createElement('div');
-                bar.className = 'audio-bar';
-                bar.style.left = `${i * (100 / barCount)}%`;
-                bar.style.height = `${max * 100}%`;
-                
-                audioVisualizer.appendChild(bar);
-            }
-        }
-        
-        // 预测按钮点击事件
-        predictBtn.addEventListener('click', predictLungCapacity);
-        
-        async function predictLungCapacity() {
-            if (!audioInput.files.length) {
-                alert('请先上传音频文件');
-                return;
-            }
-            
-            if (!model) {
-                alert('模型尚未加载完成');
-                return;
-            }
-            
-            try {
-                setLoading(true, "分析中...");
-                resultContainer.style.display = 'none';
-                
-                const file = audioInput.files[0];
-                const arrayBuffer = await file.arrayBuffer();
-                
-                // 1. 解码音频
-                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                
-                // 2. 预处理音频（与Python代码完全一致）
-                const inputTensor = await preprocessAudio(audioBuffer);
-                
-                // 3. 执行推理
-                const prediction = await runInference(inputTensor);
-                
-                // 4. 显示结果
-                showResults(prediction);
-                
-            } catch (error) {
-                console.error('预测失败:', error);
-                alert(`预测失败: ${error.message}`);
-            } finally {
-                setLoading(false, "开始预测");
-            }
-        }
-        
-        // 音频预处理（严格匹配Python训练代码）
-        async function preprocessAudio(audioBuffer) {
-            // 1. 重采样到22050Hz
-            const sourceSampleRate = audioBuffer.sampleRate;
-            const originalData = audioBuffer.getChannelData(0);
-            
-            // 创建离线音频上下文进行重采样
-            const offlineCtx = new OfflineAudioContext(
-                1, // 单声道
-                Math.floor(audioBuffer.duration * TARGET_SAMPLE_RATE),
-                TARGET_SAMPLE_RATE
-            );
-            
-            const bufferSource = offlineCtx.createBufferSource();
-            bufferSource.buffer = audioBuffer;
-            bufferSource.connect(offlineCtx.destination);
-            
-            const resampledBuffer = await offlineCtx.startRendering();
-            const audioData = resampledBuffer.getChannelData(0);
-            
-            // 2. 计算梅尔频谱（简化版STFT）
-            const frameSize = N_FFT;
-            const hopSize = HOP_LENGTH;
-            const nFrames = Math.floor((audioData.length - frameSize) / hopSize) + 1;
-            
-            // 初始化梅尔频谱数组（用-10填充静音区域）
-            const melSpec = new Float32Array(N_MELS * TARGET_LENGTH).fill(-10);
-            
-            // 简化的STFT计算
-            for (let t = 0; t < Math.min(nFrames, TARGET_LENGTH); t++) {
-                const start = t * hopSize;
-                const frame = audioData.slice(start, start + frameSize);
-                
-                // 应用汉宁窗
-                const windowedFrame = frame.map((x, i) => 
-                    x * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (frameSize - 1)))
-                );
-                
-                // 简化的梅尔频带计算
-                for (let m = 0; m < N_MELS; m++) {
-                    let energy = 0;
-                    for (let n = 0; n < frameSize; n++) {
-                        energy += windowedFrame[n] * windowedFrame[n];
+                for (let j = 0; j < binFreqs.length; j++) {
+                    const freq = binFreqs[j];
+                    const mel = hzToMel(freq);
+                    
+                    if (mel < leftMel || mel > rightMel) {
+                        continue;
+                    } else if (mel <= centerMel) {
+                        filterBank[i][j] = (mel - leftMel) / (centerMel - leftMel);
+                    } else {
+                        filterBank[i][j] = (rightMel - mel) / (rightMel - centerMel);
                     }
-                    melSpec[m * TARGET_LENGTH + t] = Math.log(energy + 1e-8);
                 }
             }
             
-            // 3. 标准化处理
-            let mean = 0, std = 0;
-            for (let i = 0; i < melSpec.length; i++) mean += melSpec[i];
+            return filterBank;
+        }
+        
+        // 赫兹转梅尔频率
+        function hzToMel(hz) {
+            return 2595 * Math.log10(1 + hz / 700);
+        }
+        
+        // 梅尔转赫兹频率
+        function melToHz(mel) {
+            return 700 * (Math.pow(10, mel / 2595) - 1);
+        }
+        
+        // 生成线性空间数组
+        function linspace(start, end, num) {
+            const result = new Array(num);
+            const step = (end - start) / (num - 1);
+            
+            for (let i = 0; i < num; i++) {
+                result[i] = start + step * i;
+            }
+            
+            return result;
+        }
+        
+        // 加载ONNX模型
+        async function loadONNXModel() {
+            const statusDiv = document.getElementById('status');
+            
+            try {
+                statusDiv.className = 'loading';
+                statusDiv.textContent = '正在加载ONNX模型...';
+                
+                // 设置ONNX运行时选项
+                ort.env.wasm.numThreads = 1; // 解决部分WASM线程问题
+                
+                // 加载模型
+                ortSession = await ort.InferenceSession.create('./lung_model.onnx', {
+                    executionProviders: ['wasm'] // 强制使用WASM后端
+                });
+                
+                statusDiv.className = 'ready';
+                statusDiv.textContent = '模型加载完成，请上传音频文件';
+                
+                console.log('ONNX模型加载成功');
+                console.log('输入:', ortSession.inputNames);
+                console.log('输出:', ortSession.outputNames);
+                
+            } catch (error) {
+                statusDiv.className = 'error';
+                statusDiv.innerHTML = `❌ 模型加载失败: ${error.message}<br>请检查控制台获取详细信息`;
+                console.error("模型加载错误:", error);
+            }
+        }
+        
+        // 处理文件选择
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = 'loading';
+            statusDiv.textContent = '正在处理音频文件...';
+            
+            // 显示文件名
+            document.getElementById('file-name').textContent = `已选择文件: ${file.name}`;
+            
+            // 预览音频
+            const audioPlayer = document.getElementById('audio-player');
+            const audioPreview = document.getElementById('audio-preview');
+            audioPlayer.src = URL.createObjectURL(file);
+            audioPreview.style.display = 'block';
+            
+            // 显示进度条
+            const progressContainer = document.getElementById('progress-container');
+            const progressBar = document.getElementById('progress-bar');
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            
+            // 处理音频文件
+            processAudioFile(file)
+                .then(prediction => {
+                    // 显示结果
+                    const resultDiv = document.getElementById('result');
+                    resultDiv.innerHTML = `预测肺活量: <span style="color: #28a745; font-size: 24px;">${prediction.toFixed(2)}</span>`;
+                    
+                    statusDiv.className = 'success';
+                    statusDiv.textContent = '预测完成！';
+                    progressBar.style.width = '100%';
+                    
+                    // 3秒后隐藏进度条
+                    setTimeout(() => {
+                        progressContainer.style.display = 'none';
+                    }, 3000);
+                })
+                .catch(error => {
+                    statusDiv.className = 'error';
+                    statusDiv.textContent = `预测失败: ${error.message}`;
+                    console.error("预测错误:", error);
+                    
+                    progressBar.style.width = '0%';
+                    progressContainer.style.display = 'none';
+                });
+        }
+        
+        // 处理音频文件并进行预测
+        async function processAudioFile(file) {
+            if (!ortSession) {
+                throw new Error('ONNX模型未加载');
+            }
+            
+            const progressBar = document.getElementById('progress-bar');
+            
+            // 1. 读取音频文件
+            progressBar.style.width = '10%';
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: SAMPLE_RATE
+            });
+            const arrayBuffer = await file.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            
+            // 2. 转换为PyTorch期望的格式
+            progressBar.style.width = '20%';
+            const waveform = convertAudioBufferToTensor(audioBuffer);
+            
+            // 3. 预处理音频
+            progressBar.style.width = '30%';
+            const melSpec = await preprocessAudio(waveform);
+            
+            // 4. 标准化
+            progressBar.style.width = '50%';
+            const normalized = normalizeMelSpec(melSpec);
+            
+            // 5. 创建ONNX输入张量
+            progressBar.style.width = '70%';
+            const inputTensor = createInputTensor(normalized);
+            
+            // 6. 运行预测
+            progressBar.style.width = '80%';
+            const prediction = await runInference(inputTensor);
+            
+            return prediction;
+        }
+        
+        // 将AudioBuffer转换为Tensor
+        function convertAudioBufferToTensor(audioBuffer) {
+            // 获取单声道数据
+            const channelData = audioBuffer.getChannelData(0);
+            
+            // 如果需要重采样，这里可以添加重采样逻辑
+            // 注意：我们已经设置了AudioContext的采样率为目标采样率
+            
+            // 转换为Float32Array
+            return new Float32Array(channelData);
+        }
+        
+        // 预处理音频
+        async function preprocessAudio(waveform) {
+            // 1. 计算STFT
+            const stft = computeSTFT(waveform);
+            
+            // 2. 计算功率谱
+            const powerSpectrum = computePowerSpectrum(stft);
+            
+            // 3. 应用梅尔滤波器组
+            const melSpectrogram = applyMelFilterBank(powerSpectrum);
+            
+            // 4. 对数压缩
+            const logMelSpec = applyLogCompression(melSpectrogram);
+            
+            // 5. 调整时间维度
+            const adjusted = adjustTimeDimension(logMelSpec);
+            
+            return adjusted;
+        }
+        
+        // 计算短时傅里叶变换
+        function computeSTFT(waveform) {
+            const frameSize = N_FFT;
+            const hopSize = HOP_LENGTH;
+            const nFrames = Math.floor((waveform.length - frameSize) / hopSize) + 1;
+            
+            // 创建汉宁窗
+            const hannWindow = new Float32Array(frameSize);
+            for (let i = 0; i < frameSize; i++) {
+                hannWindow[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (frameSize - 1)));
+            }
+            
+            const stft = new Array(nFrames);
+            
+            for (let t = 0; t < nFrames; t++) {
+                const frameStart = t * hopSize;
+                const frame = new Float32Array(frameSize);
+                
+                // 应用窗函数
+                for (let i = 0; i < frameSize; i++) {
+                    frame[i] = waveform[frameStart + i] * hannWindow[i];
+                }
+                
+                // 计算FFT (使用JavaScript的FFT实现)
+                const fft = computeFFT(frame);
+                stft[t] = fft;
+            }
+            
+            return stft;
+        }
+        
+        // 计算FFT (简化版，实际应用中应使用更高效的实现)
+        function computeFFT(frame) {
+            const fftSize = N_FFT;
+            const fft = new Array(fftSize / 2 + 1);
+            
+            // 这里使用简单的DFT实现，实际应用中应使用更高效的FFT算法
+            for (let k = 0; k <= fftSize / 2; k++) {
+                let real = 0;
+                let imag = 0;
+                
+                for (let n = 0; n < fftSize; n++) {
+                    const angle = -2 * Math.PI * k * n / fftSize;
+                    real += frame[n] * Math.cos(angle);
+                    imag += frame[n] * Math.sin(angle);
+                }
+                
+                fft[k] = { real, imag };
+            }
+            
+            return fft;
+        }
+        
+        // 计算功率谱
+        function computePowerSpectrum(stft) {
+            const powerSpectrum = new Array(stft.length);
+            
+            for (let t = 0; t < stft.length; t++) {
+                powerSpectrum[t] = new Array(stft[t].length);
+                
+                for (let k = 0; k < stft[t].length; k++) {
+                    const { real, imag } = stft[t][k];
+                    powerSpectrum[t][k] = (real * real + imag * imag) / N_FFT;
+                }
+            }
+            
+            return powerSpectrum;
+        }
+        
+        // 应用梅尔滤波器组
+        function applyMelFilterBank(powerSpectrum) {
+            const nFrames = powerSpectrum.length;
+            const melSpec = new Array(N_MELS);
+            
+            for (let m = 0; m < N_MELS; m++) {
+                melSpec[m] = new Array(nFrames).fill(0);
+                
+                for (let t = 0; t < nFrames; t++) {
+                    for (let k = 0; k < powerSpectrum[t].length; k++) {
+                        melSpec[m][t] += powerSpectrum[t][k] * melFilterBank[m][k];
+                    }
+                }
+            }
+            
+            return melSpec;
+        }
+        
+        // 应用对数压缩
+        function applyLogCompression(melSpectrogram) {
+            const logMelSpec = new Float32Array(N_MELS * melSpectrogram[0].length);
+            
+            for (let m = 0; m < N_MELS; m++) {
+                for (let t = 0; t < melSpectrogram[m].length; t++) {
+                    logMelSpec[m * melSpectrogram[m].length + t] = Math.log(melSpectrogram[m][t] + 1e-8);
+                }
+            }
+            
+            return logMelSpec;
+        }
+        
+        // 调整时间维度
+        function adjustTimeDimension(logMelSpec) {
+            const totalFrames = logMelSpec.length / N_MELS;
+            const adjusted = new Float32Array(N_MELS * TARGET_LENGTH);
+            
+            if (totalFrames >= TARGET_LENGTH) {
+                // 裁剪
+                for (let m = 0; m < N_MELS; m++) {
+                    for (let t = 0; t < TARGET_LENGTH; t++) {
+                        adjusted[m * TARGET_LENGTH + t] = logMelSpec[m * totalFrames + t];
+                    }
+                }
+            } else {
+                // 填充
+                for (let m = 0; m < N_MELS; m++) {
+                    for (let t = 0; t < TARGET_LENGTH; t++) {
+                        if (t < totalFrames) {
+                            adjusted[m * TARGET_LENGTH + t] = logMelSpec[m * totalFrames + t];
+                        } else {
+                            adjusted[m * TARGET_LENGTH + t] = 0; // 用0填充
+                        }
+                    }
+                }
+            }
+            
+            return adjusted;
+        }
+        
+        // 标准化梅尔频谱图
+        function normalizeMelSpec(melSpec) {
+            // 计算均值
+            let mean = 0;
+            for (let i = 0; i < melSpec.length; i++) {
+                mean += melSpec[i];
+            }
             mean /= melSpec.length;
             
+            // 计算标准差
+            let std = 0;
             for (let i = 0; i < melSpec.length; i++) {
                 std += Math.pow(melSpec[i] - mean, 2);
             }
             std = Math.sqrt(std / melSpec.length);
             
+            // 标准化
             const normalized = new Float32Array(melSpec.length);
             for (let i = 0; i < melSpec.length; i++) {
                 normalized[i] = (melSpec[i] - mean) / (std + 1e-8);
             }
             
-            // 4. 创建ONNX Tensor
-            return new ort.Tensor(
-                'float32', 
-                normalized,
-                [1, 1, N_MELS, TARGET_LENGTH]  // 与模型输入形状匹配
-            );
+            return normalized;
         }
         
-        // 执行推理
+        // 创建ONNX输入张量
+        function createInputTensor(normalizedMelSpec) {
+            // 模型期望的输入形状: [1, 1, N_MELS, TARGET_LENGTH]
+            const dims = [1, 1, N_MELS, TARGET_LENGTH];
+            const tensorData = new Float32Array(dims[0] * dims[1] * dims[2] * dims[3]);
+            
+            // 填充数据
+            for (let i = 0; i < N_MELS; i++) {
+                for (let j = 0; j < TARGET_LENGTH; j++) {
+                    const idx = i * TARGET_LENGTH + j;
+                    tensorData[idx] = normalizedMelSpec[idx];
+                }
+            }
+            
+            return new ort.Tensor('float32', tensorData, dims);
+        }
+        
+        // 运行推理
         async function runInference(inputTensor) {
-            // 创建输入对象（名称必须与模型输入一致）
-            const feeds = {
-                [model.inputNames[0]]: inputTensor
-            };
+            const feeds = {};
+            feeds[ortSession.inputNames[0]] = inputTensor;
             
-            // 执行推理
-            const results = await model.run(feeds);
+            const results = await ortSession.run(feeds);
+            const output = results[ortSession.outputNames[0]];
             
-            // 获取输出（假设输出名为'output'）
-            const output = results[model.outputNames[0]];
-            
-            // 返回预测值（转换为毫升）
-            return output.data[0];
+            // 获取预测值
+            const prediction = output.data[0];
+            return prediction;
         }
-        
-        // 显示结果
-        function showResults(prediction) {
-            // 显示预测值（转换为整数）
-            const predictionML = Math.round(prediction);
-            predictionValue.textContent = predictionML;
-            
-            // 更新进度条（假设正常范围是2000-6000ml）
-            const minCapacity = 2000;
-            const maxCapacity = 6000;
-            const percentage = Math.min(100, 
-                Math.max(0, (predictionML - minCapacity) / (maxCapacity - minCapacity) * 100)
-            );
-            progressBar.style.width = `${percentage}%`;
-            
-            // 提供健康建议
-            let advice = '';
-            if (predictionML < 2500) {
-                advice = `
-                    <p style="color: #d32f2f;">您的预测肺活量值偏低，建议：</p>
-                    <ul>
-                        <li>进行有氧运动如游泳、跑步等</li>
-                        <li>练习深呼吸和腹式呼吸</li>
-                        <li>避免吸烟和二手烟环境</li>
-                        <li>如有不适，请咨询专业医生</li>
-                    </ul>
-                `;
-            } else if (predictionML < 4000) {
-                advice = `
-                    <p style="color: #fb8c00;">您的预测肺活量值在正常范围内，建议：</p>
-                    <ul>
-                        <li>继续保持规律运动</li>
-                        <li>定期进行肺功能检查</li>
-                        <li>注意空气质量，避免污染环境</li>
-                    </ul>
-                `;
-            } else {
-                advice = `
-                    <p style="color: #388e3c;">您的预测肺活量值优秀，建议：</p>
-                    <ul>
-                        <li>继续保持当前的运动习惯</li>
-                        <li>可以尝试一些高强度的有氧运动</li>
-                        <li>定期监测肺功能变化</li>
-                    </ul>
-                `;
-            }
-            healthAdvice.innerHTML = advice;
-            
-            // 显示结果区域
-            resultContainer.style.display = 'block';
-        }
-        
-        // 设置加载状态
-        function setLoading(isLoading, text) {
-            if (isLoading) {
-                spinner.style.display = 'inline-block';
-                predictBtn.disabled = true;
-            } else {
-                spinner.style.display = 'none';
-                predictBtn.disabled = false;
-            }
-            btnText.textContent = text;
-        }
-        
-        // 页面初始化
-        window.addEventListener('load', () => {
-            initAudioContext();
-            initModel();
-        });
     </script>
 </body>
 </html>
